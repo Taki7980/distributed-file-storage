@@ -8,8 +8,18 @@ import (
 
 // it represents a remote node connection over the TCP established connection
 type TCPPeer struct {
-	conn     net.Conn
+	conn net.Conn
+
+	// if we dail and recives a connection then the outbound will be true
+	// if we accept and recives a connection then the outbound will be false
 	outbound bool
+}
+
+func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
+	return &TCPPeer{
+		conn:     conn,
+		outbound: outbound,
+	}
 }
 
 type TCPTransport struct {
@@ -52,5 +62,7 @@ func (t *TCPTransport) startAcceptLoop() {
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn) {
-	fmt.Printf("New incomming connection: %v\n", conn)
+	peer := NewTCPPeer(conn, true)
+
+	fmt.Printf("New incomming connection: %v\n", peer)
 }
