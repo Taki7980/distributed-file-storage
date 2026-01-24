@@ -91,13 +91,4 @@ A function that runs when peers connect, allowing you to verify or authenticate 
 go test ./p2p
 ```
 
-## Next Steps
 
-This is a foundational layer. To build a complete P2P application, you'd want to add:
-
-- Message routing logic
-- Peer discovery mechanisms
-- Protocol definitions for your specific use case
-- Error recovery and reconnection handling
-
-## License
