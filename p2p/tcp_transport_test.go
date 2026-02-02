@@ -6,12 +6,20 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-func TestTransport(t *testing.T) {
+func TestTCPTransport(t *testing.T) {
 	listenAddr := ":4000"
-	tr := NewTCPTransport(listenAddr)
+	opts := TCPTransportOpts{
+		ListenAddr:    listenAddr,
+		HandshakeFunc: NoOpHandshake,
+		Decoder:       DefaultDecoder{},
+	}
 
-	assert.Equal(t, tr.listenAddress, listenAddr)
+	tr := NewTCPTransport(opts)
+	assert.Equal(t, listenAddr, tr.ListenAddr)
+	assert.NotNil(t, tr.HandshakeFunc)
+	assert.NotNil(t, tr.Decoder)
 
-	//server here
-	assert.Nil(t, tr.ListenAndAccept())
+	err := tr.ListenAndAccept()
+	assert.Nil(t, err)
+	assert.NotNil(t, tr.listener)
 }
