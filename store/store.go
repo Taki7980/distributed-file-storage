@@ -4,6 +4,7 @@ import (
 	"io"
 	"log"
 	"os"
+	"strings"
 )
 
 type PathTransformFunc func(string) string
@@ -14,6 +15,17 @@ type StoreOpt struct {
 
 var DefaultPathTransformFunc = func(key string) string {
 	return key
+}
+
+func sanitizeFilename(filename string) string {
+	replacer := strings.NewReplacer(
+		":", "_",
+		"[", "",
+		"]", "",
+		"/", "_",
+		"\\", "_",
+	)
+	return replacer.Replace(filename)
 }
 
 type Store struct {
@@ -27,8 +39,13 @@ func NewStore(opts StoreOpt) *Store {
 }
 
 func (s *Store) WriteStream(key string, r io.Reader) error {
+	if err := os.MkdirAll("message_storage", os.ModePerm); err != nil {
+		return err
+	}
+
 	pathName := s.PathTransformFunc(key)
-	pathAndFilename := pathName + ".dat"
+	pathName = sanitizeFilename(pathName)
+	pathAndFilename := "message_storage/" + pathName + ".dat"
 
 	f, err := os.Create(pathAndFilename)
 	if err != nil {

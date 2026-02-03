@@ -1,15 +1,23 @@
 package main
 
 import (
+	"bytes"
 	"fmt"
 	"log"
 	"main/p2p"
+	"main/store"
 	"os"
 	"os/signal"
 	"syscall"
+	"time"
 )
 
 func main() {
+	storeOpts := store.StoreOpt{
+		PathTransformFunc: store.DefaultPathTransformFunc,
+	}
+	s := store.NewStore(storeOpts)
+
 	tcpOpts := p2p.TCPTransportOpts{
 		ListenAddr:    ":3000",
 		HandshakeFunc: p2p.NoOpHandshake,
@@ -30,6 +38,13 @@ func main() {
 	go func() {
 		for msg := range tr.Consume() {
 			fmt.Printf("Received message from %s: %s\n", msg.From, string(msg.Payload))
+
+			key := fmt.Sprintf("msg_%s_%d", msg.From.String(), time.Now().Unix())
+			reader := bytes.NewReader(msg.Payload)
+
+			if err := s.WriteStream(key, reader); err != nil {
+				log.Printf("Error storing message: %s\n", err)
+			}
 		}
 	}()
 
