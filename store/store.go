@@ -1,4 +1,4 @@
-package main
+package store
 
 import (
 	"io"
@@ -26,7 +26,7 @@ func NewStore(opts StoreOpt) *Store {
 	}
 }
 
-func (s *Store) writeStream(key string, r io.Reader) error {
+func (s *Store) WriteStream(key string, r io.Reader) error {
 	pathName := s.PathTransformFunc(key)
 	pathAndFilename := pathName + ".dat"
 
