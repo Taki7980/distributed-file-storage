@@ -18,8 +18,14 @@ func main() {
 	}
 	s := store.NewStore(storeOpts)
 
+	listenAddr := os.Getenv("LISTEN_ADDR")
+	if listenAddr == "" {
+		// The protocol currently has no peer authentication, so remote exposure
+		// must be an explicit operator decision instead of the default.
+		listenAddr = "127.0.0.1:3000"
+	}
 	tcpOpts := p2p.TCPTransportOpts{
-		ListenAddr:    ":3000",
+		ListenAddr:    listenAddr,
 		HandshakeFunc: p2p.NoOpHandshake,
 		Decoder:       p2p.DefaultDecoder{},
 	}
