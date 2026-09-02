@@ -6,6 +6,7 @@ import (
 	"io"
 	"net"
 	"sync"
+	"time"
 )
 
 type TCPPeer struct {
@@ -29,15 +30,18 @@ func (p *TCPPeer) RemoteAddr() string {
 }
 
 type TCPTransportOpts struct {
-	ListenAddr    string
-	HandshakeFunc HandshakeFunc
-	Decoder       Decoder
+	ListenAddr     string
+	HandshakeFunc  HandshakeFunc
+	Decoder        Decoder
+	MaxConnections int
+	IdleTimeout    time.Duration
 }
 
 type TCPTransport struct {
 	TCPTransportOpts
 	listener net.Listener
 	rpcch    chan RPC
+	slots    chan struct{}
 
 	mu     sync.RWMutex
 	peers  map[net.Addr]*TCPPeer
@@ -45,10 +49,17 @@ type TCPTransport struct {
 }
 
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
+	if opts.MaxConnections <= 0 {
+		opts.MaxConnections = 128
+	}
+	if opts.IdleTimeout <= 0 {
+		opts.IdleTimeout = 2 * time.Minute
+	}
 	return &TCPTransport{
 		TCPTransportOpts: opts,
 		peers:            make(map[net.Addr]*TCPPeer),
 		rpcch:            make(chan RPC, 1024),
+		slots:            make(chan struct{}, opts.MaxConnections),
 	}
 }
 
@@ -115,8 +126,28 @@ func (t *TCPTransport) startAcceptLoop() {
 			return
 		}
 
-		go t.handleConn(conn, false)
+		if !t.tryAcquireConnection() {
+			_ = conn.Close()
+			continue
+		}
+		go func() {
+			defer t.releaseConnection()
+			t.handleConn(conn, false)
+		}()
 	}
+}
+
+func (t *TCPTransport) tryAcquireConnection() bool {
+	select {
+	case t.slots <- struct{}{}:
+		return true
+	default:
+		return false
+	}
+}
+
+func (t *TCPTransport) releaseConnection() {
+	<-t.slots
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
@@ -127,19 +158,28 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 
 	defer func() {
 		if err != nil {
-			peer.Close()
+			_ = peer.Close()
 		}
 		t.removePeer(peer)
 	}()
 
+	if err = conn.SetDeadline(time.Now().Add(t.IdleTimeout)); err != nil {
+		return
+	}
 	if err = t.HandshakeFunc(peer); err != nil {
 		fmt.Printf("TCP handshake error with %s: %s\n", peer.RemoteAddr(), err)
+		return
+	}
+	if err = conn.SetDeadline(time.Time{}); err != nil {
 		return
 	}
 
 	t.addPeer(peer)
 
 	for {
+		if err = conn.SetReadDeadline(time.Now().Add(t.IdleTimeout)); err != nil {
+			return
+		}
 		rpc := RPC{}
 		err = t.Decoder.Decode(conn, &rpc)
 		if err != nil {
