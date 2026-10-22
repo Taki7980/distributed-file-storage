@@ -38,10 +38,10 @@ func (p *TCPPeer) Send(rpc RPC) error {
 }
 
 type TCPTransportOpts struct {
-	ListenAddr         string
-	HandshakeFunc      HandshakeFunc
-	OnPeer             func(Peer) error
-	OnPeerDisconnect   func(Peer)
+	ListenAddr       string
+	HandshakeFunc    HandshakeFunc
+	OnPeer           func(Peer) error
+	OnPeerDisconnect func(Peer)
 }
 
 type TCPTransport struct {

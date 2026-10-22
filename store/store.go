@@ -159,4 +159,3 @@ func (s *Store) pruneEmptyParents(pathKey PathKey) error {
 	}
 	return nil
 }
-

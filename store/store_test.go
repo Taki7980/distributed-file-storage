@@ -105,4 +105,3 @@ func TestStoreDeleteDoesNotDeleteSiblingKeysInSameShard(t *testing.T) {
 	assert.Nil(t, s.Delete(key2))
 	assert.False(t, s.Has(key2))
 }
-

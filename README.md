@@ -5,6 +5,8 @@ A high-performance peer-to-peer distributed file storage system written in Go, f
 ## Features
 
 - **Content-Addressable Storage (CAS)**: Files are stored using cryptographic SHA-1 hashes partitioned into 5-character directory tiers (`e0c04/54727/...`) to prevent directory saturation.
+- **Zero-Knowledge Encryption at Rest (AES-256-GCM)**: Replicated network files are encrypted with authenticated encryption before broadcast. Remote peers store only ciphertext, and retrieval authenticates and decrypts payloads on the owner node.
+- **Cryptographic Tamper Verification**: Any corrupted or tampered ciphertext from peers fails GCM authentication check and is rejected before reaching disk or caller.
 - **P2P Transport**: Persistent TCP transport with bidirectional streaming using Go's `gob` serialization.
 - **Mesh Replication**: Storing a file on one node automatically broadcasts and replicates across all connected peers.
 - **On-Demand Network Retrieval**: When a file is requested on a node that doesn't have it locally, the node queries the mesh, retrieves the payload, caches it locally, and serves it.
@@ -24,6 +26,8 @@ A high-performance peer-to-peer distributed file storage system written in Go, f
 │   ├── tcp_transport_test.go
 │   └── transport.go        # Transport & Peer interfaces
 ├── server/
+│   ├── crypto.go           # AES-256-GCM encryption & key generator
+│   ├── crypto_test.go      # Roundtrip and tamper authentication tests
 │   ├── server.go           # FileServer managing store, peers, and RPCs
 │   └── server_test.go      # 3-node cluster integration test
 └── store/

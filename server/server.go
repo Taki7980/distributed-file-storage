@@ -16,6 +16,7 @@ type FileServerOpts struct {
 	ListenAddr     string
 	Root           string
 	BootstrapNodes []string
+	EncKey         []byte
 }
 
 type FileServer struct {
@@ -34,6 +35,10 @@ type FileServer struct {
 }
 
 func NewFileServer(opts FileServerOpts) *FileServer {
+	if len(opts.EncKey) != 32 {
+		panic("invalid EncKey length: must be 32 bytes for AES-256-GCM")
+	}
+
 	s := &FileServer{
 		FileServerOpts: opts,
 		store: store.NewStore(store.StoreOpt{
@@ -84,11 +89,16 @@ func (s *FileServer) Store(key string, r io.Reader) error {
 		return err
 	}
 
+	encryptedData, err := encrypt(s.EncKey, buf.Bytes())
+	if err != nil {
+		return err
+	}
+
 	rpc := p2p.RPC{
 		From:    s.transport.Addr(),
 		Type:    p2p.MsgStore,
 		Key:     key,
-		Payload: buf.Bytes(),
+		Payload: encryptedData,
 	}
 
 	return s.Broadcast(rpc)
@@ -122,10 +132,14 @@ func (s *FileServer) Get(key string) (io.Reader, error) {
 
 	select {
 	case data := <-resCh:
-		if err := s.store.WriteStream(key, bytes.NewReader(data)); err != nil {
+		decrypted, err := decrypt(s.EncKey, data)
+		if err != nil {
 			return nil, err
 		}
-		return bytes.NewReader(data), nil
+		if err := s.store.WriteStream(key, bytes.NewReader(decrypted)); err != nil {
+			return nil, err
+		}
+		return bytes.NewReader(decrypted), nil
 	case <-time.After(5 * time.Second):
 		return nil, fmt.Errorf("timeout fetching file %s from network", key)
 	}

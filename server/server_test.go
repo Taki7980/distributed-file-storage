@@ -13,9 +13,14 @@ import (
 func TestThreeNodeClusterReplicationAndFetch(t *testing.T) {
 	tempRoot := t.TempDir()
 
+	keyA := NewEncryptionKey()
+	keyB := NewEncryptionKey()
+	keyC := NewEncryptionKey()
+
 	nodeA := NewFileServer(FileServerOpts{
 		ListenAddr: ":5001",
 		Root:       filepath.Join(tempRoot, "nodeA"),
+		EncKey:     keyA,
 	})
 	assert.Nil(t, nodeA.Start())
 	defer nodeA.Stop()
@@ -24,6 +29,7 @@ func TestThreeNodeClusterReplicationAndFetch(t *testing.T) {
 		ListenAddr:     ":5002",
 		Root:           filepath.Join(tempRoot, "nodeB"),
 		BootstrapNodes: []string{":5001"},
+		EncKey:         keyB,
 	})
 	assert.Nil(t, nodeB.Start())
 	defer nodeB.Stop()
@@ -32,6 +38,7 @@ func TestThreeNodeClusterReplicationAndFetch(t *testing.T) {
 		ListenAddr:     ":5003",
 		Root:           filepath.Join(tempRoot, "nodeC"),
 		BootstrapNodes: []string{":5001", ":5002"},
+		EncKey:         keyC,
 	})
 	assert.Nil(t, nodeC.Start())
 	defer nodeC.Stop()
@@ -57,6 +64,14 @@ func TestThreeNodeClusterReplicationAndFetch(t *testing.T) {
 	assert.True(t, nodeA.Has(fileKey), "nodeA must have the file")
 	assert.True(t, nodeB.Has(fileKey), "nodeB must have replicated file")
 	assert.True(t, nodeC.Has(fileKey), "nodeC must have replicated file")
+
+	// Verify encryption on disk: B's stored raw bytes must be ciphertext, not plaintext
+	rB, err := nodeB.store.Read(fileKey)
+	assert.Nil(t, err)
+	rawCiphertextB, err := io.ReadAll(rB)
+	rB.Close()
+	assert.Nil(t, err)
+	assert.NotEqual(t, fileData, rawCiphertextB, "replicated file on nodeB must be encrypted ciphertext")
 
 	// 2. Delete local copy on A only (bypassing broadcast to test network fetch)
 	assert.Nil(t, nodeA.store.Delete(fileKey))
@@ -86,4 +101,3 @@ func TestThreeNodeClusterReplicationAndFetch(t *testing.T) {
 	peersAfter := len(nodeA.Peers())
 	assert.Less(t, peersAfter, peersBefore, "nodeA peer list should decrease after nodeC stops")
 }
-

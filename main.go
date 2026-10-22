@@ -30,10 +30,12 @@ func main() {
 		}
 	}
 
+	// shortcut: key lives only in memory, so network copies can't be recovered after a restart; upgrade to a key file or KMS for persistence.
 	fs := server.NewFileServer(server.FileServerOpts{
 		ListenAddr:     *listenAddr,
 		Root:           *root,
 		BootstrapNodes: bootstrapNodes,
+		EncKey:         server.NewEncryptionKey(),
 	})
 
 	if err := fs.Start(); err != nil {
