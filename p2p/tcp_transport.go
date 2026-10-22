@@ -1,37 +1,47 @@
 package p2p
 
 import (
+	"encoding/gob"
 	"errors"
-	"fmt"
 	"io"
 	"net"
 	"sync"
 )
 
 type TCPPeer struct {
-	conn     net.Conn
+	net.Conn
 	outbound bool
+	encMu    sync.Mutex
+	enc      *gob.Encoder
 }
 
 func NewTCPPeer(conn net.Conn, outbound bool) *TCPPeer {
 	return &TCPPeer{
-		conn:     conn,
+		Conn:     conn,
 		outbound: outbound,
+		enc:      gob.NewEncoder(conn),
 	}
 }
 
 func (p *TCPPeer) Close() error {
-	return p.conn.Close()
+	return p.Conn.Close()
 }
 
 func (p *TCPPeer) RemoteAddr() string {
-	return p.conn.RemoteAddr().String()
+	return p.Conn.RemoteAddr().String()
+}
+
+func (p *TCPPeer) Send(rpc RPC) error {
+	p.encMu.Lock()
+	defer p.encMu.Unlock()
+	return p.enc.Encode(rpc)
 }
 
 type TCPTransportOpts struct {
-	ListenAddr    string
-	HandshakeFunc HandshakeFunc
-	Decoder       Decoder
+	ListenAddr         string
+	HandshakeFunc      HandshakeFunc
+	OnPeer             func(Peer) error
+	OnPeerDisconnect   func(Peer)
 }
 
 type TCPTransport struct {
@@ -40,59 +50,84 @@ type TCPTransport struct {
 	rpcch    chan RPC
 
 	mu     sync.RWMutex
-	peers  map[net.Addr]*TCPPeer
+	peers  map[string]*TCPPeer
 	closed bool
 }
 
 func NewTCPTransport(opts TCPTransportOpts) *TCPTransport {
+	if opts.HandshakeFunc == nil {
+		opts.HandshakeFunc = NoOpHandshake
+	}
 	return &TCPTransport{
 		TCPTransportOpts: opts,
-		peers:            make(map[net.Addr]*TCPPeer),
+		peers:            make(map[string]*TCPPeer),
 		rpcch:            make(chan RPC, 1024),
 	}
 }
 
-func (t *TCPTransport) ListenAndAccept() error {
-	var err error
+func (t *TCPTransport) Addr() string {
+	t.mu.RLock()
+	defer t.mu.RUnlock()
+	if t.listener != nil {
+		return t.listener.Addr().String()
+	}
+	return t.ListenAddr
+}
 
-	t.listener, err = net.Listen("tcp", t.ListenAddr)
-	if err != nil {
-		return err
+func (t *TCPTransport) Close() error {
+	t.mu.Lock()
+	if t.closed {
+		t.mu.Unlock()
+		return errors.New("transport already closed")
+	}
+	t.closed = true
+
+	var err error
+	if t.listener != nil {
+		err = t.listener.Close()
 	}
 
-	go t.startAcceptLoop()
-	return nil
+	peersToClose := make([]*TCPPeer, 0, len(t.peers))
+	for _, peer := range t.peers {
+		peersToClose = append(peersToClose, peer)
+	}
+	t.peers = make(map[string]*TCPPeer)
+	t.mu.Unlock()
+
+	for _, peer := range peersToClose {
+		peer.Close()
+	}
+
+	close(t.rpcch)
+	return err
 }
 
 func (t *TCPTransport) Consume() <-chan RPC {
 	return t.rpcch
 }
 
-func (t *TCPTransport) Close() error {
-	t.mu.Lock()
-	defer t.mu.Unlock()
-
-	if t.closed {
-		return errors.New("transport already closed")
+func (t *TCPTransport) Dial(addr string) error {
+	conn, err := net.Dial("tcp", addr)
+	if err != nil {
+		return err
 	}
 
-	t.closed = true
-
-	if t.listener != nil {
-		if err := t.listener.Close(); err != nil {
-			return err
-		}
-	}
-
-	for _, peer := range t.peers {
-		if err := peer.Close(); err != nil {
-			fmt.Printf("error closing peer %s: %s\n", peer.RemoteAddr(), err)
-		}
-	}
-
-	close(t.rpcch)
+	go t.handleConn(conn, true)
 	return nil
 }
+
+func (t *TCPTransport) ListenAndAccept() error {
+	ln, err := net.Listen("tcp", t.ListenAddr)
+	if err != nil {
+		return err
+	}
+	t.listener = ln
+
+	go t.startAcceptLoop()
+	return nil
+}
+
+// Private functions below (me.txt convention: public top, private bottom)
 
 func (t *TCPTransport) startAcceptLoop() {
 	for {
@@ -101,18 +136,10 @@ func (t *TCPTransport) startAcceptLoop() {
 			t.mu.RLock()
 			closed := t.closed
 			t.mu.RUnlock()
-
 			if closed {
 				return
 			}
-
-			if ne, ok := err.(net.Error); ok && ne.Temporary() {
-				fmt.Printf("TCP: temporary accept error: %s\n", err)
-				continue
-			}
-
-			fmt.Printf("TCP: accept error: %s\n", err)
-			return
+			continue
 		}
 
 		go t.handleConn(conn, false)
@@ -120,38 +147,42 @@ func (t *TCPTransport) startAcceptLoop() {
 }
 
 func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
-	var (
-		err  error
-		peer = NewTCPPeer(conn, outbound)
-	)
+	peer := NewTCPPeer(conn, outbound)
 
 	defer func() {
-		if err != nil {
-			peer.Close()
-		}
+		peer.Close()
 		t.removePeer(peer)
+		if t.OnPeerDisconnect != nil {
+			t.OnPeerDisconnect(peer)
+		}
 	}()
 
-	if err = t.HandshakeFunc(peer); err != nil {
-		fmt.Printf("TCP handshake error with %s: %s\n", peer.RemoteAddr(), err)
+	if err := t.HandshakeFunc(peer); err != nil {
 		return
+	}
+
+	if t.OnPeer != nil {
+		if err := t.OnPeer(peer); err != nil {
+			return
+		}
 	}
 
 	t.addPeer(peer)
 
+	dec := gob.NewDecoder(conn)
 	for {
-		rpc := RPC{}
-		err = t.Decoder.Decode(conn, &rpc)
+		var rpc RPC
+		err := dec.Decode(&rpc)
 		if err != nil {
-			if err == io.EOF {
-				fmt.Printf("connection closed by peer: %s\n", peer.RemoteAddr())
-			} else {
-				fmt.Printf("TCP decode error from %s: %s\n", peer.RemoteAddr(), err)
+			if errors.Is(err, io.EOF) || errors.Is(err, net.ErrClosed) {
+				return
 			}
 			return
 		}
 
-		rpc.From = conn.RemoteAddr()
+		if len(rpc.From) == 0 {
+			rpc.From = conn.RemoteAddr().String()
+		}
 
 		t.mu.RLock()
 		closed := t.closed
@@ -161,18 +192,23 @@ func (t *TCPTransport) handleConn(conn net.Conn, outbound bool) {
 			return
 		}
 
-		t.rpcch <- rpc
+		func() {
+			defer func() {
+				_ = recover()
+			}()
+			t.rpcch <- rpc
+		}()
 	}
 }
 
 func (t *TCPTransport) addPeer(peer *TCPPeer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	t.peers[peer.conn.RemoteAddr()] = peer
+	t.peers[peer.RemoteAddr()] = peer
 }
 
 func (t *TCPTransport) removePeer(peer *TCPPeer) {
 	t.mu.Lock()
 	defer t.mu.Unlock()
-	delete(t.peers, peer.conn.RemoteAddr())
+	delete(t.peers, peer.RemoteAddr())
 }

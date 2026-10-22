@@ -1,94 +1,68 @@
-# P2P Network Transport Layer
+# Distributed File Storage (DFS)
 
-<div align="center">
-  <img src="./images/mio.gif" alt="Overwhelmed by networking" width="400"/>
-  <p><i>Me trying to understand network programming before building this</i></p>
-</div>
-
-## What's This About?
-
-Basically, I'm building the plumbing for computers to talk to each other. You know how apps like BitTorrent or blockchain nodes chat with each other without a central server? This is that - the boring but essential part that handles connections, reads messages, and makes sure everything doesn't explode when 10 computers try to connect at once.
+A high-performance peer-to-peer distributed file storage system written in Go, featuring Content-Addressable Storage (CAS), SHA-1 path sharding, full mesh replication, and network file retrieval.
 
 ## Features
 
-- **TCP Transport**: Handles network connections between peers using TCP protocol
-- **Flexible Message Decoding**: Choose how your messages are decoded (GOB format or raw bytes)
-- **Handshake Support**: Verify and authenticate peers before accepting their connections
-- **Concurrent Connection Handling**: Manages multiple peer connections at the same time
-- **Simple API**: Easy-to-use interface for setting up network nodes
-
-## How It Works
-
-1. **Start a Transport**: Create a TCP transport that listens on a specific address (like `:3000`)
-2. **Accept Connections**: The transport automatically accepts incoming connections from other peers
-3. **Handshake**: When a peer connects, perform a handshake to verify the connection
-4. **Receive Messages**: Decode and process messages from connected peers
-
-## Quick Start
-
-```go
-package main
-
-import (
-    "log"
-    "main/p2p"
-)
-
-func main() {
-    // Configure your transport
-    tcpOpts := p2p.TCPTransportOpts{
-        ListnenAddr:   ":3000",
-        HandshakeFunc: p2p.DumyHandshakeFunc,
-        Decoder:       p2p.DefaultDecoder{},
-    }
-
-    // Create and start the transport
-    tr := p2p.NewTCPTransport(tcpOpts)
-    if err := tr.ListenAndAccept(); err != nil {
-        log.Fatal(err)
-    }
-
-    // Keep the server running
-    select {}
-}
-```
+- **Content-Addressable Storage (CAS)**: Files are stored using cryptographic SHA-1 hashes partitioned into 5-character directory tiers (`e0c04/54727/...`) to prevent directory saturation.
+- **P2P Transport**: Persistent TCP transport with bidirectional streaming using Go's `gob` serialization.
+- **Mesh Replication**: Storing a file on one node automatically broadcasts and replicates across all connected peers.
+- **On-Demand Network Retrieval**: When a file is requested on a node that doesn't have it locally, the node queries the mesh, retrieves the payload, caches it locally, and serves it.
+- **Distributed Deletion**: Deleting a key propagates a delete request across the cluster.
+- **Interactive Node REPL**: Built-in CLI for running nodes, bootstrapping peers, and storing/retrieving files.
 
 ## Project Structure
 
 ```
 .
-├── main.go                 # Example usage
-├── images/
-│   └── mio.gif            # Essential project documentation
-└── p2p/
-    ├── transport.go        # Transport and Peer interfaces
-    ├── tcp_transport.go    # TCP implementation
-    ├── message.go          # Message structure
-    ├── decoding.go         # Message decoders
-    └── handshake.go        # Handshake functions
+├── main.go                 # Node entrypoint with interactive REPL
+├── me.txt                  # Project conventions (public top, private bottom)
+├── p2p/
+│   ├── handshake.go        # Peer handshake protocol
+│   ├── message.go          # RPC message specifications
+│   ├── tcp_transport.go    # TCP transport and peer connection manager
+│   ├── tcp_transport_test.go
+│   └── transport.go        # Transport & Peer interfaces
+├── server/
+│   ├── server.go           # FileServer managing store, peers, and RPCs
+│   └── server_test.go      # 3-node cluster integration test
+└── store/
+    ├── store.go            # CAS store with directory sharding
+    └── store_test.go       # CAS and storage unit tests
 ```
 
-## Components
+## Running the Cluster
 
-### Message
+### Start Node 1 (Bootstrap Node)
+```bash
+go run main.go -listen :3000 -root ./data_3000
+```
 
-A simple container for data being sent between peers. Contains the sender's address and the payload (actual data).
+### Start Node 2 (Connected to Node 1)
+```bash
+go run main.go -listen :4000 -root ./data_4000 -peers :3000
+```
 
-### Decoder
+### Start Node 3 (Connected to Node 1 and Node 2)
+```bash
+go run main.go -listen :5000 -root ./data_5000 -peers :3000,:4000
+```
 
-Determines how raw network bytes are converted into usable messages. Two options:
+## Interactive REPL Commands
 
-- **DefaultDecoder**: Reads raw bytes (simple and fast)
-- **GOBDecoder**: Uses Go's GOB encoding (good for Go-to-Go communication)
-
-### Handshake
-
-A function that runs when peers connect, allowing you to verify or authenticate connections before accepting them.
+- `put <key> <file_or_text>`: Stores data in local CAS and replicates to all connected peers.
+- `get <key> [out_filepath]`: Fetches data from local storage or across the network.
+- `del <key>`: Deletes data locally and across the network.
+- `has <key>`: Checks whether the file exists in local store.
+- `peers`: Lists all connected peer addresses.
+- `help`: Displays available commands.
+- `quit` / `exit`: Gracefully shuts down the node.
 
 ## Running Tests
 
+Run all unit and integration tests with the Go race detector:
 ```bash
-go test ./p2p
+go test -v -race ./...
 ```
 
 
